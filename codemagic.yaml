@@ -1,0 +1,73 @@
+# Cloud builds for Box Fort. Codemagic builds the iOS app on its Macs, so no
+# Mac is needed. Setup steps are in docs/LAUNCH_CHECKLIST.md.
+workflows:
+  android-release:
+    name: Android → Google Play (internal testing)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      android_signing:
+        - boxfort_upload_key # upload keystore you add in Codemagic
+      groups:
+        - google_play # holds GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "v*"
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Tests
+        script: flutter test
+      - name: Build app bundle
+        script: |
+          LATEST=$(google-play get-latest-build-number --package-name "com.prishasophatii.boxfort" --tracks=internal,alpha,beta,production 2>/dev/null || echo 0)
+          flutter build appbundle --release --build-number=$((LATEST + 1))
+    artifacts:
+      - build/**/outputs/**/*.aab
+    publishing:
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: internal
+        submit_as_draft: true
+
+  ios-release:
+    name: iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: BoxFort ASC key # App Store Connect API key name in Codemagic
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.prishasophatii.boxfort
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "v*"
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Tests
+        script: flutter test
+      - name: Pods
+        script: cd ios && pod install --repo-update
+      - name: Use signing profiles
+        script: xcode-project use-profiles
+      - name: Build ipa
+        script: |
+          LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          flutter build ipa --release --build-number=$((LATEST + 1)) \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
